@@ -7,26 +7,26 @@
 
 ## Problem
 
-Veri setinde her satır bir tarım parseline ait gözlemi temsil eder: toprak nemi, sıcaklık, yağış, nem, rüzgar hızı, toprak pH'ı gibi sayısal değişkenler ile toprak tipi, ürün tipi, büyüme evresi, mevsim, sulama tipi, su kaynağı, malçlama ve bölge gibi kategorik değişkenler. Hedef değişken `Irrigation_Need` ciddi biçimde dengesizdir: **Low %58,7 — Medium %38,0 — High %3,3**. Tarımsal açıdan en kritik sınıf olan "High" aynı zamanda en az örneğe sahip sınıftır; bu da problemi standart bir çok sınıflı sınıflandırmadan daha zorlu hale getirir.
+Veri setinde her satır bir tarım parseline ait gözlemi temsil eder: toprak nemi, sıcaklık, yağış, nem, rüzgar hızı, toprak pH'ı gibi sayısal değişkenler ile toprak tipi, ürün tipi, büyüme evresi, mevsim, sulama tipi, su kaynağı, malçlama ve bölge gibi kategorik değişkenler. Hedef değişken `Irrigation_Need` ciddi biçimde dengesizdir: **Low %58,7 — Medium %38,0 — High %3,3**. Tarımsal açıdan en kritik sınıf olan "High" aynı zamanda en az örneğe sahip sınıftır; bu nedenle çözüm, dengesiz sınıf problemine odaklanan **balanced accuracy** metriği etrafında kurgulanmıştır.
 
 ## Yaklaşım
 
-### 1. Keşifsel Veri Analizi (EDA)
+### 1. Veri Hazırlama
 
-- Sayısal değişkenlerde IQR tabanlı aykırı değer taraması ve eksik değer raporu
-- Kategorik değişkenlerin hedefle ilişkisi için **Cramér's V** analizi
-- Sınıf bazlı boxplot, korelasyon ısı haritaları ve pairplot ile dağılım incelemesi
-- "High" sınıfının içindeki anomalilerin ayrıştırılması (kuru toprak kaynaklı "normal High" ile düşük sıcaklık + yüksek nem koşullarındaki "biyolojik anomali" ayrımı; büyüme evresi bazlı lift analizi)
+- Yarışma verisi ile orijinal kaynak veri seti (`cdeotte/s6e4-the-original-dataset`) birleştirilerek genişletilmiş bir eğitim seti oluşturuldu
+- 8 ham kategorik kolon + üretilen etkileşim kolonları için `OrdinalEncoder` kullanıldı; görülmemiş kategorilere karşı `handle_unknown='use_encoded_value', unknown_value=-1` ile dayanıklılık sağlandı
+- CatBoost için kategorik kolonlar **encode edilmeden ham haliyle** ayrı bir kopyada tutuldu ve modelin yerel kategorik desteğinden yararlanıldı
+- Hedef değişken `LabelEncoder` ile sayısallaştırıldı
 
-### 2. Veri Hazırlama
+### 2. Dengesiz Sınıf Stratejisi
 
-- Yarışma verisi (630 bin satır) ile orijinal kaynak veri seti (10 bin satır) birleştirilerek **640 bin satır × 21 kolonluk** eğitim seti oluşturuldu
-- 8 kategorik kolon için `OrdinalEncoder`, **veri sızıntısını (data leakage) önlemek amacıyla** scikit-learn `Pipeline` içinde her çapraz doğrulama katmanında ayrı ayrı fit edildi
-- Görülmemiş kategorilere karşı `handle_unknown='use_encoded_value', unknown_value=-1` ile dayanıklılık sağlandı
+- `compute_class_weight('balanced')` ile sınıf ağırlıkları hesaplandı ve kritik **"High" sınıfının ağırlığı ek olarak 2 katına çıkarıldı**
+- Bu ağırlıklar her üç modele de örnek ağırlığı (sample weight) olarak verildi
+- Tahmin aşamasında "High" sınıfı için **olasılık eşiği optimizasyonu** yapıldı: OOF tahminler üzerinde 0.05–0.50 aralığı taranarak balanced accuracy'yi maksimize eden eşik bulundu; test tahminlerinde bu eşiği aşan örnekler doğrudan "High" olarak etiketlendi
 
 ### 3. Özellik Mühendisliği
 
-Alan bilgisine dayalı 8 yeni özellik üretildi:
+Alan bilgisine dayalı 17 yeni özellik üretildi:
 
 | Özellik | Tanım |
 |---|---|
@@ -38,43 +38,57 @@ Alan bilgisine dayalı 8 yeni özellik üretildi:
 | `Soil_Fertility` | Toprak nemi × organik karbon |
 | `Wind_Evap_Index` | Rüzgar hızı × (100 − nem) / 100 |
 | `Rainfall_Cat` | Yağış miktarının kategorik binlenmesi |
+| `is_dry_soil` | Kuru toprak bayrağı (toprak nemi < 25) |
+| `high_risk_flag` | Aktif büyüme + kuru toprak birleşik risk bayrağı |
+| `no_mulching` | Malçlama yapılmamış parsel bayrağı |
+| `rain_deficit` | Yağış açığı (2500 − yağış, alt sınır 0) |
+| `moisture_stress` | Yağış açığı / (toprak nemi + 1) oranı |
+| `evap_proxy` | Sıcaklık × güneşlenme / (nem + 1) buharlaşma proxy'si |
+| `season_growth` | Mevsim × büyüme evresi kategorik etkileşimi |
+| `source_type` | Su kaynağı × sulama tipi kategorik etkileşimi |
+| `region_soil` | Bölge × toprak tipi kategorik etkileşimi |
 
 ### 4. Modelleme ve Değerlendirme
 
-- **5-katlı StratifiedKFold** çapraz doğrulama, out-of-fold (OOF) tahminlerle değerlendirme
-- Modeller: **LightGBM**, **XGBoost** (early stopping ile), **CatBoost** (yerel kategorik destek) ve **Optuna** ile hiperparametre araması yapılmış LightGBM (50 trial)
-- LightGBM ve XGBoost olasılıkları OOF doğruluğuna göre ağırlıklı **ensemble (blend)** ile birleştirildi
-- Sınıf bazlı classification report, confusion matrix ve özellik önem grafikleriyle analiz; verinin yalnızca %3,3'ünü oluşturan kritik **"High" sınıfında %92 recall** elde edildi
+- **5-katlı StratifiedKFold** çapraz doğrulama, out-of-fold (OOF) tahminlerle **balanced accuracy** üzerinden değerlendirme
+- Üç gradient boosting modeli, üçü de **GPU üzerinde** ve early stopping ile eğitildi:
+  - **LightGBM** — Optuna ile bulunmuş hiperparametreler
+  - **XGBoost** — `hist` + CUDA
+  - **CatBoost** — yerel kategorik özellik desteği ve sınıf ağırlıkları ile
+- Üç modelin olasılıkları, OOF balanced accuracy'yi maksimize eden ağırlıklar **grid search ile taranarak** ensemble (blend) edildi
+- Ensemble çıktısına "High" eşik optimizasyonu uygulandıktan sonra sınıf bazlı classification report ile nihai OOF performansı raporlandı
 
 ## Depo İçeriği
 
 ```
 .
-└── ai4sg-playground-series-s6e4.ipynb   # EDA + veri hazırlama + modelleme + submission (tek notebook)
+├── README.md
+└── prediction irrigation need v2.ipynb   # Veri hazırlama + özellik müh. + modelleme + submission (tek notebook)
 ```
 
 ## Çalıştırma
 
-Notebook, Kaggle ortamında çalışacak şekilde yazılmıştır (veri yolları `/kaggle/input/...` altındadır).
+Notebook, Kaggle ortamında **GPU açık** olarak çalışacak şekilde yazılmıştır (veri yolları `/kaggle/input/...` altındadır, modeller `device='gpu'` / `device='cuda'` / `task_type='GPU'` ile eğitilir).
 
 ### Kaggle üzerinde (önerilen)
 
 1. Notebook'u Kaggle'a yükleyin veya yeni bir Kaggle Notebook'a kopyalayın.
-2. Sağ panelden **Add Input** ile şu iki veri kaynağını ekleyin:
+2. Sağ panelden **Accelerator** olarak GPU seçin.
+3. **Add Input** ile şu iki veri kaynağını ekleyin:
    - `playground-series-s6e4` yarışma verisi (train.csv, test.csv, sample_submission.csv)
    - `cdeotte/s6e4-the-original-dataset` (orijinal kaynak veri seti)
-3. Tüm hücreleri çalıştırın; sonunda `submission.csv` üretilir.
+4. Tüm hücreleri çalıştırın; sonunda `submission.csv` üretilir.
 
 ### Yerel ortamda
 
 ```bash
-pip install pandas numpy scikit-learn lightgbm xgboost catboost optuna matplotlib seaborn scipy jupyter
+pip install pandas numpy scikit-learn lightgbm xgboost catboost
 ```
 
-Verileri [yarışma sayfasından](https://www.kaggle.com/competitions/playground-series-s6e4) indirdikten sonra notebook'un başındaki `/kaggle/input/...` yollarını kendi dizininize göre güncelleyip Jupyter ile çalıştırın.
+Verileri [yarışma sayfasından](https://www.kaggle.com/competitions/playground-series-s6e4) indirdikten sonra notebook'un başındaki `/kaggle/input/...` yollarını kendi dizininize göre güncelleyip Jupyter ile çalıştırın. GPU yoksa parametrelerdeki `device` / `task_type` ayarlarını CPU'ya çevirmeniz gerekir (`device='cpu'`, `tree_method='hist'`, `task_type='CPU'`).
 
-> Not: 640 bin satırlık eğitim seti üzerinde 5-katlı CV ile üç ayrı gradient boosting modeli eğitildiği için tam koşum, donanıma bağlı olarak uzun sürebilir.
+> Not: Genişletilmiş eğitim seti üzerinde 5-katlı CV ile üç ayrı gradient boosting modeli eğitildiği için tam koşum, donanıma bağlı olarak uzun sürebilir.
 
 ## Kullanılan Teknolojiler
 
-Python, Pandas, NumPy, scikit-learn, LightGBM, XGBoost, CatBoost, Optuna, Matplotlib, Seaborn, SciPy
+Python, Pandas, NumPy, scikit-learn, LightGBM, XGBoost, CatBoost
