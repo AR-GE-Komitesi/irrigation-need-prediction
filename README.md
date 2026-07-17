@@ -5,6 +5,8 @@
 > **ISU AI 4 Social Good Kulübü** bünyesinde 3 kişilik takım projesi olarak geliştirilmiştir.
 > Kaggle sonucu: **4.316 takım arasında 852. sıra (üst %19,7)**.
 
+Yukarıdaki sıralama, yarışma sürecinde kullanılan ilk çözümle (LightGBM + XGBoost ensemble, "High" sınıfında %92 recall) elde edilmiştir. Bu depodaki notebook, yarışma sonrasında geliştirilen **v2** sürümüdür: ensemble'a CatBoost eklenmiş, değerlendirme balanced accuracy'ye taşınmış ve "High" sınıfı için ağırlıklandırma + olasılık eşiği optimizasyonu güçlendirilmiştir.
+
 ## Problem
 
 Veri setinde her satır bir tarım parseline ait gözlemi temsil eder: toprak nemi, sıcaklık, yağış, nem, rüzgar hızı, toprak pH'ı gibi sayısal değişkenler ile toprak tipi, ürün tipi, büyüme evresi, mevsim, sulama tipi, su kaynağı, malçlama ve bölge gibi kategorik değişkenler. Hedef değişken `Irrigation_Need` ciddi biçimde dengesizdir: **Low %58,7 — Medium %38,0 — High %3,3**. Tarımsal açıdan en kritik sınıf olan "High" aynı zamanda en az örneğe sahip sınıftır; bu nedenle çözüm, dengesiz sınıf problemine odaklanan **balanced accuracy** metriği etrafında kurgulanmıştır.
